@@ -29,6 +29,7 @@ nav a:hover, nav a[aria-current="page"] { color: var(--accent); border-bottom-co
 main { min-height: calc(100vh - 177px); padding-top: 46px; padding-bottom: 56px; }
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 26px; margin-bottom: 30px; }
 .page-heading > .button { flex-shrink: 0; }
+.heading-actions { display: flex; gap: 12px; flex-wrap: wrap; }
 .eyebrow { color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: 1.4px; text-transform: uppercase; margin: 0 0 8px; }
 h1 { font-size: clamp(27px, 3.5vw, 36px); line-height: 1.25; letter-spacing: -1px; margin: 0; font-weight: 720; overflow-wrap: anywhere; }
 h2 { font-size: 16px; line-height: 1.5; font-weight: 650; margin: 0; }

@@ -1,7 +1,9 @@
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.models import LOCAL_TIMEZONE
+from app.models import LOCAL_TIMEZONE, local_today
 from app.repository import ClinicRepository
 
 
@@ -82,6 +84,8 @@ def test_complete_and_escape_note(client: TestClient, past_appointment: int) -> 
     "path,status",
     [
         ("/patients/new", 200),
+        ("/schedule/new", 200),
+        ("/schedule/new?clinic_id=999", 404),
         ("/patients/999", 404),
         ("/appointments/999", 404),
         ("/appointments/new?slot_id=999", 404),
@@ -124,3 +128,77 @@ def test_styles_are_local(client: TestClient) -> None:
     assert "--accent:" in response.text
     text = client.get("/").text
     assert "<script" not in text
+
+
+def test_schedule_management_page_filters_doctors(client: TestClient) -> None:
+    page = client.get("/schedule/new", params={"clinic_id": 2})
+    assert page.status_code == 200
+    assert "Управление расписанием" in page.text
+    assert "Белов Игорь Олегович" in page.text
+    assert "Соколова Анна Сергеевна" not in page.text
+
+
+def test_schedule_management_creates_slots(
+    client: TestClient, repository: ClinicRepository
+) -> None:
+    day = local_today() + timedelta(days=10)
+    response = client.post(
+        "/schedule",
+        data={
+            "clinic_id": 1,
+            "doctor_id": 1,
+            "date": day.isoformat(),
+            "starts_at": "09:00",
+            "ends_at": "11:00",
+            "break_starts_at": "10:00",
+            "break_ends_at": "10:30",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "notice=schedule_created" in response.headers["location"]
+    assert "count=3" in response.headers["location"]
+    page = client.get(response.headers["location"])
+    assert "Добавлено слотов: 3." in page.text
+    assert "09:00" in page.text
+    assert "10:30" in page.text
+    assert len(repository.list_slots(1, day)) == 3
+
+
+def test_schedule_form_error_preserves_input(client: TestClient) -> None:
+    day = local_today() + timedelta(days=10)
+    response = client.post(
+        "/schedule",
+        data={
+            "clinic_id": 1,
+            "doctor_id": 1,
+            "date": day.isoformat(),
+            "starts_at": "09:15",
+            "ends_at": "11:00",
+            "break_starts_at": "10:00",
+            "break_ends_at": "10:30",
+        },
+    )
+    assert response.status_code == 422
+    assert 'value="09:15"' in response.text
+    assert 'value="10:00"' in response.text
+    assert "кратно 30 минутам" in response.text
+    assert "Соколова Анна Сергеевна" in response.text
+
+
+def test_schedule_form_reports_overlap(client: TestClient) -> None:
+    day = local_today() + timedelta(days=10)
+    data = {
+        "clinic_id": 1,
+        "doctor_id": 1,
+        "date": day.isoformat(),
+        "starts_at": "09:00",
+        "ends_at": "10:00",
+        "break_starts_at": "",
+        "break_ends_at": "",
+    }
+    assert client.post("/schedule", data=data, follow_redirects=False).status_code == 303
+    response = client.post("/schedule", data={**data, "starts_at": "09:30", "ends_at": "10:30"})
+    assert response.status_code == 409
+    assert "пересекающийся" in response.text
+    assert 'value="09:30"' in response.text

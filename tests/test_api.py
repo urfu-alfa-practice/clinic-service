@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,3 +179,74 @@ def test_date_without_schedule(client: TestClient) -> None:
         ).json()
         == []
     )
+
+
+def test_create_schedule_via_api(client: TestClient) -> None:
+    day = (local_today() + timedelta(days=10)).isoformat()
+    response = client.post(
+        "/api/slots",
+        json={
+            "clinic_id": 1,
+            "doctor_id": 1,
+            "date": day,
+            "starts_at": "09:00",
+            "ends_at": "11:00",
+            "break_starts_at": "10:00",
+            "break_ends_at": "10:30",
+        },
+    )
+    assert response.status_code == 201
+    slots = response.json()
+    assert len(slots) == 3
+    assert response.headers["location"] == f"/api/slots?clinic_id=1&date={day}"
+    assert [
+        datetime.fromisoformat(slot["starts_at"]).astimezone(LOCAL_TIMEZONE).strftime("%H:%M")
+        for slot in slots
+    ] == ["09:00", "09:30", "10:30"]
+    listed = client.get("/api/slots", params={"clinic_id": 1, "date": day}).json()
+    assert {slot["id"] for slot in listed} == {slot["id"] for slot in slots}
+
+
+@pytest.mark.parametrize(
+    "payload,status",
+    [
+        ({"starts_at": "09:15"}, 422),
+        ({"ends_at": "10:45"}, 422),
+        ({"starts_at": "10:00", "ends_at": "09:00"}, 422),
+        ({"break_starts_at": "10:00"}, 422),
+        ({"break_starts_at": "10:15", "break_ends_at": "10:45"}, 422),
+        ({"doctor_id": 999}, 404),
+        ({"clinic_id": 2}, 404),
+        ({"extra": "поле"}, 422),
+    ],
+)
+def test_invalid_schedule_via_api(
+    client: TestClient, payload: dict[str, object], status: int
+) -> None:
+    day = (local_today() + timedelta(days=10)).isoformat()
+    body: dict[str, object] = {
+        "clinic_id": 1,
+        "doctor_id": 1,
+        "date": day,
+        "starts_at": "09:00",
+        "ends_at": "11:00",
+    }
+    body.update(payload)
+    assert client.post("/api/slots", json=body).status_code == status
+    assert client.get("/api/slots", params={"clinic_id": 1, "date": day}).json() == []
+
+
+def test_schedule_overlap_via_api(client: TestClient) -> None:
+    day = (local_today() + timedelta(days=10)).isoformat()
+    body = {
+        "clinic_id": 1,
+        "doctor_id": 1,
+        "date": day,
+        "starts_at": "09:00",
+        "ends_at": "10:00",
+    }
+    assert client.post("/api/slots", json=body).status_code == 201
+    response = client.post("/api/slots", json={**body, "starts_at": "09:30", "ends_at": "10:30"})
+    assert response.status_code == 409
+    assert "пересекающийся" in response.json()["detail"]
+    assert len(client.get("/api/slots", params={"clinic_id": 1, "date": day}).json()) == 2

@@ -17,9 +17,11 @@ from app.models import (
     LabResult,
     Patient,
     PatientCreate,
+    ScheduleCreate,
     Slot,
     VisitComplete,
     local_today,
+    schedule_slot_times,
 )
 
 SLOT_SELECT = """
@@ -166,6 +168,65 @@ class ClinicRepository:
         if row is None:
             raise NotFoundError("Время приёма не найдено.")
         return Slot.model_validate(dict(row))
+
+    def create_schedule(self, data: ScheduleCreate) -> list[Slot]:
+        intervals = [
+            (
+                datetime.combine(data.date, start, LOCAL_TIMEZONE),
+                datetime.combine(data.date, end, LOCAL_TIMEZONE),
+            )
+            for start, end in schedule_slot_times(
+                data.starts_at,
+                data.ends_at,
+                data.break_starts_at,
+                data.break_ends_at,
+            )
+        ]
+        slot_ids: list[int] = []
+        with self._connect() as connection:
+            # Проверка пересечений и вставка всех слотов — одна транзакция.
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM clinics WHERE id = ?", (data.clinic_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("Поликлиника не найдена.")
+            doctor = connection.execute(
+                "SELECT clinic_id FROM doctors WHERE id = ?", (data.doctor_id,)
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Врач не найден.")
+            if doctor["clinic_id"] != data.clinic_id:
+                raise NotFoundError("Выбранный врач не работает в этой поликлинике.")
+            for starts_at, ends_at in intervals:
+                overlap = connection.execute(
+                    """
+                    SELECT starts_at, ends_at FROM slots
+                    WHERE doctor_id = ? AND starts_at < ? AND ends_at > ?
+                    ORDER BY starts_at LIMIT 1
+                    """,
+                    (data.doctor_id, timestamp(ends_at), timestamp(starts_at)),
+                ).fetchone()
+                if overlap is not None:
+                    existing_start = datetime.fromisoformat(overlap["starts_at"])
+                    existing_end = datetime.fromisoformat(overlap["ends_at"])
+                    local_start = existing_start.astimezone(LOCAL_TIMEZONE)
+                    local_end = existing_end.astimezone(LOCAL_TIMEZONE)
+                    raise ConflictError(
+                        "У врача уже есть слот "
+                        f"{local_start:%d.%m.%Y, %H:%M}–{local_end:%H:%M}, "
+                        "пересекающийся с указанным интервалом."
+                    )
+            for starts_at, ends_at in intervals:
+                cursor = connection.execute(
+                    "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                    (data.doctor_id, timestamp(starts_at), timestamp(ends_at)),
+                )
+                assert cursor.lastrowid is not None
+                slot_ids.append(cursor.lastrowid)
+        return [self.get_slot(slot_id) for slot_id in slot_ids]
 
     def list_patients(self) -> list[Patient]:
         with self._connect() as connection:

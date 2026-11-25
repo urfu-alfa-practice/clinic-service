@@ -14,6 +14,7 @@ from app.models import (
     Patient,
     PatientCard,
     PatientCreate,
+    ScheduleCreate,
     Slot,
     VisitComplete,
 )
@@ -36,6 +37,14 @@ def create_api_router(repository: ClinicRepository) -> APIRouter:
     )
     def list_slots(clinic_id: EntityId, day: Annotated[date, Query(alias="date")]) -> list[Slot]:
         return repository.list_slots(clinic_id, day)
+
+    @router.post("/slots", status_code=201, tags=["Расписание"], summary="Создать расписание врача")
+    def create_schedule(data: ScheduleCreate, response: Response) -> list[Slot]:
+        slots = repository.create_schedule(data)
+        response.headers["Location"] = (
+            f"/api/slots?clinic_id={data.clinic_id}&date={data.date.isoformat()}"
+        )
+        return slots
 
     @router.get("/patients", tags=["Пациенты"], summary="Пациенты")
     def list_patients() -> list[Patient]:

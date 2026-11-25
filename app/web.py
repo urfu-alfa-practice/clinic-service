@@ -17,6 +17,7 @@ from app.models import (
     AppointmentStatus,
     EntityId,
     PatientCreate,
+    ScheduleCreate,
     VisitComplete,
     local_today,
 )
@@ -26,17 +27,24 @@ from app.repository import ClinicRepository
 def field_errors(error: ValidationError) -> dict[str, str]:
     messages = {}
     for item in error.errors():
-        field = str(item["loc"][0])
-        if item["type"] == "string_too_long":
+        field = str(item["loc"][0]) if item["loc"] else "__all__"
+        raw_value = item.get("input")
+        if item["type"] == "missing" or (isinstance(raw_value, str) and not raw_value.strip()):
+            message = "Заполните поле — пробелы не считаются текстом."
+        elif item["type"] == "string_too_long":
             message = f"Сократите текст до {item['ctx']['max_length']} символов."
         elif item["type"] == "value_error":
             message = str(item["ctx"]["error"])
         elif field == "birth_date":
             message = "Укажите существующую дату рождения."
+        elif field == "date":
+            message = "Укажите существующую дату."
+        elif field in {"start_time", "end_time", "break_start", "break_end"}:
+            message = "Укажите время в формате ЧЧ:ММ."
         elif field == "patient_id":
             message = "Выберите пациента из списка."
         else:
-            message = "Заполните поле — пробелы не считаются текстом."
+            message = "Проверьте значение поля."
         messages[field] = message
     return messages
 
@@ -81,6 +89,11 @@ def create_web_router(repository: ClinicRepository, templates: Jinja2Templates) 
             selected_clinic = clinics[0]
         if selected_clinic:
             slots = repository.list_slots(selected_clinic.id, selected_day)
+        notice = (
+            "Слоты добавлены в расписание."
+            if request.query_params.get("notice") == "slots-created"
+            else None
+        )
         return render(
             request,
             "schedule.html",
@@ -89,6 +102,101 @@ def create_web_router(repository: ClinicRepository, templates: Jinja2Templates) 
             clinic=selected_clinic,
             day=selected_day,
             slots=slots,
+            notice=notice,
+        )
+
+    @router.get("/schedule/manage", response_class=HTMLResponse)
+    def manage_schedule(request: Request, clinic_id: EntityId | None = None) -> HTMLResponse:
+        clinics = repository.list_clinics()
+        clinic = repository.get_clinic(clinic_id) if clinic_id is not None else None
+        doctors = repository.list_doctors(clinic.id) if clinic else []
+        return render(
+            request,
+            "schedule_manage.html",
+            nav="schedule-manage",
+            clinics=clinics,
+            clinic=clinic,
+            doctors=doctors,
+            values={"clinic_id": str(clinic_id)} if clinic_id is not None else {},
+            errors={},
+            error=None,
+            today=local_today(),
+            default_day=local_today() + timedelta(days=1),
+        )
+
+    def schedule_form_page(
+        request: Request,
+        values: dict[str, str],
+        *,
+        errors: dict[str, str] | None = None,
+        error: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        clinics = repository.list_clinics()
+        clinic = None
+        doctors = []
+        try:
+            clinic_id = int(values.get("clinic_id", ""))
+        except (TypeError, ValueError):
+            pass
+        else:
+            try:
+                clinic = repository.get_clinic(clinic_id)
+            except NotFoundError:
+                pass
+            else:
+                doctors = repository.list_doctors(clinic_id)
+        return render(
+            request,
+            "schedule_manage.html",
+            status_code=status_code,
+            nav="schedule-manage",
+            clinics=clinics,
+            clinic=clinic,
+            doctors=doctors,
+            values=values,
+            errors=errors or {},
+            error=error,
+            today=local_today(),
+            default_day=local_today() + timedelta(days=1),
+        )
+
+    @router.post("/schedule/manage", response_model=None)
+    def create_schedule(
+        request: Request,
+        clinic_id: Annotated[str, Form()] = "",
+        doctor_id: Annotated[str, Form()] = "",
+        day: Annotated[str, Form(alias="date")] = "",
+        start_time: Annotated[str, Form()] = "",
+        end_time: Annotated[str, Form()] = "",
+        break_start: Annotated[str, Form()] = "",
+        break_end: Annotated[str, Form()] = "",
+    ) -> HTMLResponse | RedirectResponse:
+        values = {
+            "clinic_id": clinic_id,
+            "doctor_id": doctor_id,
+            "date": day,
+            "start_time": start_time,
+            "end_time": end_time,
+            "break_start": break_start,
+            "break_end": break_end,
+        }
+        try:
+            data = ScheduleCreate.model_validate(values)
+        except ValidationError as error:
+            return schedule_form_page(request, values, errors=field_errors(error), status_code=422)
+        try:
+            repository.create_slots(data)
+        except (ConflictError, NotFoundError) as error:
+            return schedule_form_page(
+                request,
+                values,
+                error=str(error),
+                status_code=409 if isinstance(error, ConflictError) else 404,
+            )
+        return RedirectResponse(
+            f"/?clinic_id={data.clinic_id}&date={data.date.isoformat()}&notice=slots-created",
+            status_code=303,
         )
 
     @router.get("/patients", response_class=HTMLResponse)

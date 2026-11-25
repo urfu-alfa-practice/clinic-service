@@ -17,6 +17,7 @@ from app.models import (
     LabResult,
     Patient,
     PatientCreate,
+    ScheduleCreate,
     Slot,
     VisitComplete,
     local_today,
@@ -166,6 +167,51 @@ class ClinicRepository:
         if row is None:
             raise NotFoundError("Время приёма не найдено.")
         return Slot.model_validate(dict(row))
+
+    def create_slots(self, data: ScheduleCreate) -> int:
+        ranges = data.slot_ranges()
+        interval_start = datetime.combine(data.date, data.start_time, LOCAL_TIMEZONE)
+        interval_end = datetime.combine(data.date, data.end_time, LOCAL_TIMEZONE)
+        with self._connect() as connection:
+            # Проверка пересечений и вставка под одной блокировкой: частичного расписания не будет.
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM clinics WHERE id = ?", (data.clinic_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("Поликлиника не найдена.")
+            doctor = connection.execute(
+                "SELECT clinic_id FROM doctors WHERE id = ?", (data.doctor_id,)
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Врач не найден.")
+            if doctor["clinic_id"] != data.clinic_id:
+                raise ConflictError("Врач не относится к выбранной поликлинике.")
+            conflicts = connection.execute(
+                """
+                SELECT starts_at, ends_at FROM slots
+                WHERE doctor_id = ? AND starts_at < ? AND ends_at > ?
+                ORDER BY starts_at
+                """,
+                (data.doctor_id, timestamp(interval_end), timestamp(interval_start)),
+            ).fetchall()
+            if conflicts:
+                times = [
+                    f"{datetime.fromisoformat(row['starts_at']).astimezone(LOCAL_TIMEZONE):%H:%M}–"
+                    f"{datetime.fromisoformat(row['ends_at']).astimezone(LOCAL_TIMEZONE):%H:%M}"
+                    for row in conflicts
+                ]
+                shown = ", ".join(times[:5])
+                if len(times) > 5:
+                    shown += f" и ещё {len(times) - 5}"
+                raise ConflictError(f"У врача уже есть слоты на это время: {shown}.")
+            connection.executemany(
+                "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                [(data.doctor_id, timestamp(start), timestamp(end)) for start, end in ranges],
+            )
+        return len(ranges)
 
     def list_patients(self) -> list[Patient]:
         with self._connect() as connection:

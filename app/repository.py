@@ -17,6 +17,7 @@ from app.models import (
     LabResult,
     Patient,
     PatientCreate,
+    ScheduleCreate,
     Slot,
     VisitComplete,
     local_today,
@@ -42,7 +43,9 @@ APPOINTMENT_SELECT = """
     JOIN clinics c ON c.id = d.clinic_id
 """
 
-SCHEMA = """
+SCHEMA_VERSION = 2
+
+SCHEMA = f"""
     CREATE TABLE IF NOT EXISTS clinics (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) BETWEEN 1 AND 120),
@@ -68,6 +71,25 @@ SCHEMA = """
         ends_at TEXT NOT NULL CHECK (ends_at > starts_at),
         UNIQUE (doctor_id, starts_at)
     );
+    CREATE TABLE IF NOT EXISTS schedule_intervals (
+        id INTEGER PRIMARY KEY,
+        doctor_id INTEGER NOT NULL REFERENCES doctors(id),
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL CHECK (ends_at > starts_at),
+        break_starts_at TEXT,
+        break_ends_at TEXT,
+        created_at TEXT NOT NULL,
+        CHECK (
+            (break_starts_at IS NULL AND break_ends_at IS NULL)
+            OR (
+                break_starts_at IS NOT NULL AND break_ends_at IS NOT NULL
+                AND break_starts_at >= starts_at AND break_ends_at <= ends_at
+                AND break_starts_at < break_ends_at
+            )
+        )
+    );
+    CREATE INDEX IF NOT EXISTS schedule_intervals_by_doctor
+        ON schedule_intervals (doctor_id, starts_at);
     CREATE TABLE IF NOT EXISTS appointments (
         id INTEGER PRIMARY KEY,
         slot_id INTEGER NOT NULL REFERENCES slots(id),
@@ -94,13 +116,21 @@ SCHEMA = """
         received_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS lab_results_by_patient ON lab_results (patient_id);
-    PRAGMA user_version = 1;
+    PRAGMA user_version = {SCHEMA_VERSION};
 """
 
 
 def timestamp(value: datetime) -> str:
     """Единый формат UTC нужен в том числе для сравнения дат в SQLite."""
     return value.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def local_to_utc(day: date, value: time) -> datetime:
+    """Переводит московские дату и время в UTC, не выходя за границы datetime."""
+    try:
+        return datetime.combine(day, value, LOCAL_TIMEZONE).astimezone(UTC)
+    except OverflowError as error:
+        raise ConflictError("Дата и время вне поддерживаемого диапазона.") from error
 
 
 class ClinicRepository:
@@ -121,8 +151,11 @@ class ClinicRepository:
     def initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            if connection.execute("PRAGMA user_version").fetchone()[0] > 1:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
                 raise RuntimeError("Эта база создана более новой версией приложения.")
+            # Новые таблицы создаются и в базе версии 1: CREATE TABLE IF NOT EXISTS
+            # не трогает существующие данные, а PRAGMA в конце схемы ставит версию 2.
             connection.executescript(SCHEMA)
 
     def list_clinics(self) -> list[Clinic]:
@@ -166,6 +199,78 @@ class ClinicRepository:
         if row is None:
             raise NotFoundError("Время приёма не найдено.")
         return Slot.model_validate(dict(row))
+
+    def create_schedule(self, data: ScheduleCreate) -> list[Slot]:
+        starts_at = local_to_utc(data.date, data.start_time)
+        ends_at = local_to_utc(data.date, data.end_time)
+        break_starts_at = (
+            local_to_utc(data.date, data.break_start) if data.break_start is not None else None
+        )
+        break_ends_at = (
+            local_to_utc(data.date, data.break_end) if data.break_end is not None else None
+        )
+        with self._connect() as connection:
+            # Проверка пересечений и вставка слотов должны быть одной транзакцией.
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM clinics WHERE id = ?", (data.clinic_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("Поликлиника не найдена.")
+            doctor = connection.execute(
+                "SELECT clinic_id FROM doctors WHERE id = ?", (data.doctor_id,)
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Врач не найден.")
+            if doctor["clinic_id"] != data.clinic_id:
+                raise ConflictError("Выбранный врач не работает в этой поликлинике.")
+            for table in ("schedule_intervals", "slots"):
+                overlap = connection.execute(
+                    f"SELECT 1 FROM {table}"
+                    " WHERE doctor_id = ? AND starts_at < ? AND ends_at > ? LIMIT 1",
+                    (data.doctor_id, timestamp(ends_at), timestamp(starts_at)),
+                ).fetchone()
+                if overlap:
+                    raise ConflictError(
+                        "У врача уже есть расписание на пересекающееся время."
+                        " Выберите другой интервал."
+                    )
+            connection.execute(
+                """
+                INSERT INTO schedule_intervals
+                    (doctor_id, starts_at, ends_at, break_starts_at, break_ends_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data.doctor_id,
+                    timestamp(starts_at),
+                    timestamp(ends_at),
+                    timestamp(break_starts_at) if break_starts_at is not None else None,
+                    timestamp(break_ends_at) if break_ends_at is not None else None,
+                    timestamp(datetime.now(UTC)),
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                [
+                    (
+                        data.doctor_id,
+                        timestamp(local_to_utc(data.date, slot_start)),
+                        timestamp(local_to_utc(data.date, slot_end)),
+                    )
+                    for slot_start, slot_end in data.slot_times()
+                ],
+            )
+        with self._connect() as connection:
+            rows = connection.execute(
+                SLOT_SELECT
+                + " WHERE s.doctor_id = ? AND s.starts_at >= ? AND s.starts_at < ?"
+                + " ORDER BY s.starts_at, s.id",
+                (data.doctor_id, timestamp(starts_at), timestamp(ends_at)),
+            ).fetchall()
+        return [Slot.model_validate(dict(row)) for row in rows]
 
     def list_patients(self) -> list[Patient]:
         with self._connect() as connection:

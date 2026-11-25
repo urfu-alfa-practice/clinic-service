@@ -4,8 +4,8 @@
   --ink: #183333;
   --muted: #607575;
   --line: #dfe8e7;
-  --accent: #127569;
-  --accent-hover: #0b5b51;
+  --accent: #b42318;
+  --accent-hover: #8f1c13;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--background);
@@ -15,7 +15,7 @@
 body { margin: 0; font-size: 14px; line-height: 1.6; }
 a { color: inherit; text-underline-offset: 3px; }
 button, input, textarea, select { font: inherit; }
-:focus-visible { outline: 3px solid #208e81; outline-offset: 4px; }
+:focus-visible { outline: 3px solid #d92d20; outline-offset: 4px; }
 .container { max-width: 1220px; margin: 0 auto; padding-left: 36px; padding-right: 36px; }
 .site-header { border-bottom: 1px solid var(--line); background: var(--surface); }
 .header-inner { max-width: 1220px; min-height: 94px; margin: auto; padding: 16px 36px; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
@@ -25,7 +25,7 @@ button, input, textarea, select { font: inherit; }
 nav { display: flex; gap: 28px; align-self: stretch; align-items: stretch; }
 nav a { display: flex; align-items: center; text-decoration: none; border-bottom: 2px solid transparent; padding: 0 2px; color: var(--muted); font-size: 13px; font-weight: 600; }
 nav a:hover, nav a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
-.availability span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.availability span { width: 6px; height: 6px; border-radius: 50%; background: #127569; }
 main { min-height: calc(100vh - 177px); padding-top: 46px; padding-bottom: 56px; }
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 26px; margin-bottom: 30px; }
 .page-heading > .button { flex-shrink: 0; }
@@ -39,7 +39,7 @@ p { margin: 8px 0; }
 .button-primary { color: white; background: var(--accent); }
 .button-primary:hover { background: var(--accent-hover); }
 .button-secondary { color: var(--ink); background: white; border-color: #cddbd9; }
-.button-secondary:hover { background: #edf6f4; border-color: #9dbfb8; }
+.button-secondary:hover { background: #fdf1ef; border-color: #e2b3ad; }
 .button-danger { color: #a33730; background: #fff; border-color: #e4c7c3; }
 .button-danger:hover { background: #fff3f0; }
 .button-small { min-height: 34px; padding: 6px 12px; font-size: 12px; }
@@ -50,7 +50,7 @@ p { margin: 8px 0; }
 .toolbar .field { margin: 0; }
 .toolbar .clinic-field { flex: 1; }
 .toolbar .button { flex-shrink: 0; min-height: 44px; }
-.availability { color: var(--accent); background: #edf7f3; border: 1px solid #d9ece5; padding: 5px 10px; border-radius: 6px; font-size: 11px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.availability { color: #127569; background: #edf7f3; border: 1px solid #d9ece5; padding: 5px 10px; border-radius: 6px; font-size: 11px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th { padding: 12px 16px; background: #f8faf9; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 550; white-space: nowrap; }
@@ -81,7 +81,7 @@ tbody tr:hover { background: #fcfefd; }
 .page-note { color: var(--muted); font-size: 11px; margin-top: 16px; }
 .empty-state { padding: 60px 28px; text-align: center; }
 .empty-state p { color: var(--muted); margin: 10px 0 24px; }
-.empty-mark { display: inline-grid; place-items: center; width: 52px; height: 52px; color: var(--accent); background: #edf6f3; border-radius: 14px; font-size: 32px; margin-bottom: 18px; }
+.empty-mark { display: inline-grid; place-items: center; width: 52px; height: 52px; color: var(--accent); background: #fdf0ee; border-radius: 14px; font-size: 32px; margin-bottom: 18px; }
 .compact { padding: 32px 20px; }
 .back-link { display: inline-block; color: var(--muted); font-size: 12px; text-decoration: none; margin-bottom: 22px; }
 .back-link:hover { color: var(--accent); text-decoration: underline; }

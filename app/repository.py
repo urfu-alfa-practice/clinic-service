@@ -19,6 +19,7 @@ from app.models import (
     PatientCreate,
     Slot,
     VisitComplete,
+    WorkIntervalCreate,
     local_today,
 )
 
@@ -103,6 +104,14 @@ def timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="seconds")
 
 
+def local_interval(start: datetime, end: datetime) -> str:
+    local_start = start.astimezone(LOCAL_TIMEZONE)
+    local_end = end.astimezone(LOCAL_TIMEZONE)
+    if local_start.date() == local_end.date():
+        return f"{local_start:%d.%m.%Y %H:%M}–{local_end:%H:%M}"
+    return f"{local_start:%d.%m.%Y %H:%M}–{local_end:%d.%m.%Y %H:%M}"
+
+
 class ClinicRepository:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
@@ -166,6 +175,44 @@ class ClinicRepository:
         if row is None:
             raise NotFoundError("Время приёма не найдено.")
         return Slot.model_validate(dict(row))
+
+    def create_schedule(self, data: WorkIntervalCreate) -> int:
+        """Создаёт слоты интервала целиком или не создаёт ничего."""
+        slots = data.slots()
+        if not slots:
+            raise ConflictError("Интервал не содержит ни одного полного слота по 30 минут.")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            doctor = connection.execute(
+                "SELECT clinic_id FROM doctors WHERE id = ?", (data.doctor_id,)
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Врач не найден.")
+            if doctor["clinic_id"] != data.clinic_id:
+                raise NotFoundError("Врач не найден в выбранной поликлинике.")
+            rows = connection.execute(
+                """
+                SELECT starts_at, ends_at FROM slots
+                WHERE doctor_id = ? AND starts_at < ? AND ends_at > ?
+                """,
+                (data.doctor_id, timestamp(slots[-1][1]), timestamp(slots[0][0])),
+            ).fetchall()
+            existing = [
+                (datetime.fromisoformat(row["starts_at"]), datetime.fromisoformat(row["ends_at"]))
+                for row in rows
+            ]
+            for slot_start, slot_end in slots:
+                for existing_start, existing_end in existing:
+                    if slot_start < existing_end and slot_end > existing_start:
+                        raise ConflictError(
+                            "У врача уже есть расписание на это время: "
+                            f"{local_interval(existing_start, existing_end)}."
+                        )
+            connection.executemany(
+                "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                [(data.doctor_id, timestamp(start), timestamp(end)) for start, end in slots],
+            )
+        return len(slots)
 
     def list_patients(self) -> list[Patient]:
         with self._connect() as connection:

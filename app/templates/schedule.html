@@ -6,7 +6,10 @@
     <h1>Расписание приёмов</h1>
     <p class="subtitle">Выберите поликлинику и дату, чтобы записать пациента к врачу.</p>
   </div>
-  <a class="button button-secondary" href="/patients/new"><span aria-hidden="true">+</span> Новый пациент</a>
+  <div class="heading-actions">
+    <a class="button button-secondary" href="/schedule/manage">Управление расписанием</a>
+    <a class="button button-secondary" href="/patients/new"><span aria-hidden="true">+</span> Новый пациент</a>
+  </div>
 </div>
 {% if clinics %}
 <form class="toolbar panel" action="/" method="get">

@@ -1,14 +1,22 @@
 """Общие модели и правила ввода для API, HTML-форм и хранилища."""
 
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 LOCAL_TIMEZONE = timezone(timedelta(hours=3), name="МСК")
 NAME_MAX_LENGTH = 120
 NOTE_MAX_LENGTH = 4000
+SLOT_DURATION = timedelta(minutes=30)
 EntityId = Annotated[int, Field(ge=1, le=2**63 - 1)]
 
 
@@ -106,6 +114,67 @@ class AppointmentCreate(InputModel):
 
 class VisitComplete(InputModel):
     note: str = Field(min_length=1, max_length=NOTE_MAX_LENGTH)
+
+
+class WorkIntervalCreate(InputModel):
+    clinic_id: EntityId
+    doctor_id: EntityId
+    date: date
+    start_time: time
+    end_time: time
+    break_start: time | None = None
+    break_end: time | None = None
+
+    @field_validator("start_time", "end_time", "break_start", "break_end")
+    @classmethod
+    def validate_half_hour(cls, value: time | None) -> time | None:
+        if value is not None and (
+            value.minute not in (0, 30) or value.second != 0 or value.microsecond != 0
+        ):
+            raise ValueError("Границы должны быть кратны 30 минутам: минуты 00 или 30.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "WorkIntervalCreate":
+        if (self.break_start is None) != (self.break_end is None):
+            raise ValueError("Укажите начало и окончание перерыва или оставьте оба поля пустыми.")
+        if self.start_time >= self.end_time:
+            raise ValueError("Начало интервала должно быть раньше окончания.")
+        if self.break_start is not None and self.break_end is not None:
+            if self.break_start >= self.break_end:
+                raise ValueError("Начало перерыва должно быть раньше окончания.")
+            if self.break_start < self.start_time or self.break_end > self.end_time:
+                raise ValueError("Перерыв должен находиться внутри рабочего интервала.")
+        if not self.slots():
+            raise ValueError("Интервал не содержит ни одного полного слота по 30 минут.")
+        return self
+
+    def slots(self) -> list[tuple[datetime, datetime]]:
+        """Получасовые слоты интервала в МСК; время перерыва исключено."""
+        start = datetime.combine(self.date, self.start_time, LOCAL_TIMEZONE)
+        end = datetime.combine(self.date, self.end_time, LOCAL_TIMEZONE)
+        break_start = (
+            datetime.combine(self.date, self.break_start, LOCAL_TIMEZONE)
+            if self.break_start is not None
+            else None
+        )
+        break_end = (
+            datetime.combine(self.date, self.break_end, LOCAL_TIMEZONE)
+            if self.break_end is not None
+            else None
+        )
+        slots = []
+        current = start
+        while current + SLOT_DURATION <= end:
+            slot_end = current + SLOT_DURATION
+            if (
+                break_start is None
+                or break_end is None
+                or not (current < break_end and slot_end > break_start)
+            ):
+                slots.append((current, slot_end))
+            current = slot_end
+        return slots
 
 
 class Appointment(BaseModel):

@@ -17,6 +17,7 @@ from app.models import (
     LabResult,
     Patient,
     PatientCreate,
+    ScheduleCreate,
     Slot,
     VisitComplete,
     local_today,
@@ -42,6 +43,7 @@ APPOINTMENT_SELECT = """
     JOIN clinics c ON c.id = d.clinic_id
 """
 
+SCHEMA_VERSION = 2
 SCHEMA = """
     CREATE TABLE IF NOT EXISTS clinics (
         id INTEGER PRIMARY KEY,
@@ -62,6 +64,13 @@ SCHEMA = """
         created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS slots (
+        id INTEGER PRIMARY KEY,
+        doctor_id INTEGER NOT NULL REFERENCES doctors(id),
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL CHECK (ends_at > starts_at),
+        UNIQUE (doctor_id, starts_at)
+    );
+    CREATE TABLE IF NOT EXISTS doctor_work_intervals (
         id INTEGER PRIMARY KEY,
         doctor_id INTEGER NOT NULL REFERENCES doctors(id),
         starts_at TEXT NOT NULL,
@@ -94,7 +103,6 @@ SCHEMA = """
         received_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS lab_results_by_patient ON lab_results (patient_id);
-    PRAGMA user_version = 1;
 """
 
 
@@ -121,9 +129,11 @@ class ClinicRepository:
     def initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            if connection.execute("PRAGMA user_version").fetchone()[0] > 1:
+            if connection.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
                 raise RuntimeError("Эта база создана более новой версией приложения.")
-            connection.executescript(SCHEMA)
+            connection.executescript(
+                f"BEGIN IMMEDIATE;\n{SCHEMA}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
+            )
 
     def list_clinics(self) -> list[Clinic]:
         with self._connect() as connection:
@@ -159,6 +169,47 @@ class ClinicRepository:
                 (clinic_id, timestamp(start_utc), timestamp(end)),
             ).fetchall()
         return [Slot.model_validate(dict(row)) for row in rows]
+
+    def create_schedule(self, data: ScheduleCreate) -> None:
+        starts_at = data.at_local_time(data.start)
+        ends_at = data.at_local_time(data.end)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            doctor = connection.execute(
+                "SELECT 1 FROM doctors WHERE id = ? AND clinic_id = ?",
+                (data.doctor_id, data.clinic_id),
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Выберите врача из списка этой поликлиники.")
+            if starts_at <= datetime.now(UTC):
+                raise ConflictError("Начало рабочего интервала должно быть в будущем.")
+            start, end = timestamp(starts_at), timestamp(ends_at)
+            overlap = connection.execute(
+                """
+                SELECT 1 FROM doctor_work_intervals
+                WHERE doctor_id = ? AND starts_at < ? AND ends_at > ?
+                UNION ALL
+                SELECT 1 FROM slots
+                WHERE doctor_id = ? AND starts_at < ? AND ends_at > ?
+                LIMIT 1
+                """,
+                (data.doctor_id, end, start, data.doctor_id, end, start),
+            ).fetchone()
+            if overlap:
+                raise ConflictError(
+                    "Интервал пересекается с расписанием врача. Выберите другое время."
+                )
+            connection.execute(
+                "INSERT INTO doctor_work_intervals (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                (data.doctor_id, start, end),
+            )
+            connection.executemany(
+                "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                [
+                    (data.doctor_id, timestamp(slot_start), timestamp(slot_end))
+                    for slot_start, slot_end in data.slot_bounds()
+                ],
+            )
 
     def get_slot(self, slot_id: int) -> Slot:
         with self._connect() as connection:

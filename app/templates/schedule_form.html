@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Управление расписанием{% endblock %}
+{% macro time_field(name, label, required=false) %}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  <input id="{{ name }}" name="{{ name }}" type="time" step="1800"
+    value="{{ values.get(name, '') }}" {% if required %}required{% endif %}
+    {% if errors.get(name) %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}>
+  {% if errors.get(name) %}<p class="field-error" id="{{ name }}-error">{{ errors[name] }}</p>{% endif %}
+</div>
+{% endmacro %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>Управление расписанием</h1>
+    <p class="subtitle">Добавьте рабочее время врача. Свободные слоты появятся в расписании приёмов.</p>
+  </div>
+  <a class="button button-secondary" href="/">К расписанию</a>
+</div>
+{% if clinics %}
+<form class="toolbar panel" action="/schedule/manage" method="get">
+  <div class="field clinic-field">
+    <label for="clinic_id">Поликлиника</label>
+    <select id="clinic_id" name="clinic_id" required
+      {% if errors.get('clinic_id') %}aria-invalid="true" aria-describedby="clinic-error"{% endif %}>
+      {% if not clinic %}<option value="" selected disabled>Выберите поликлинику</option>{% endif %}
+      {% for item in clinics %}<option value="{{ item.id }}" {% if clinic and item.id == clinic.id %}selected{% endif %}>{{ item.name }} · {{ item.address }}</option>{% endfor %}
+    </select>
+    {% if errors.get('clinic_id') %}<p class="field-error" id="clinic-error">{{ errors.clinic_id }}</p>{% endif %}
+  </div>
+  <button class="button button-secondary" type="submit">Показать врачей</button>
+</form>
+{% if clinic and doctors %}
+<div class="detail-layout">
+  <form class="panel form-panel" action="/schedule/manage" method="post">
+    <input type="hidden" name="clinic_id" value="{{ clinic.id }}">
+    {% if errors %}<div class="alert alert-error" role="alert">{{ errors.get('interval', 'Проверьте отмеченные поля.') }}</div>{% endif %}
+    <div class="form-row">
+      <div class="field">
+        <label for="doctor_id">Врач</label>
+        <select id="doctor_id" name="doctor_id" required
+          {% if errors.get('doctor_id') %}aria-invalid="true" aria-describedby="doctor-error"{% endif %}>
+          <option value="" disabled {% if not values.get('doctor_id') or errors.get('doctor_id') %}selected{% endif %}>Выберите врача</option>
+          {% for doctor in doctors %}<option value="{{ doctor.id }}" {% if doctor.id | string == values.get('doctor_id') %}selected{% endif %}>{{ doctor.full_name }} · {{ doctor.specialty }}</option>{% endfor %}
+        </select>
+        {% if errors.get('doctor_id') %}<p class="field-error" id="doctor-error">{{ errors.doctor_id }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="day">Дата</label>
+        <input id="day" name="day" type="date" min="{{ today.isoformat() }}" value="{{ values.get('day', '') }}" required
+          {% if errors.get('day') %}aria-invalid="true" aria-describedby="day-error"{% endif %}>
+        {% if errors.get('day') %}<p class="field-error" id="day-error">{{ errors.day }}</p>{% endif %}
+      </div>
+    </div>
+    <fieldset class="schedule-fieldset">
+      <legend>Рабочее время</legend>
+      <div class="form-row">
+        {{ time_field('start', 'Начало', true) }}
+        {{ time_field('end', 'Окончание', true) }}
+      </div>
+    </fieldset>
+    <fieldset class="schedule-fieldset">
+      <legend>Перерыв <span class="optional">необязательно</span></legend>
+      <div class="form-row">
+        {{ time_field('break_start', 'Начало перерыва') }}
+        {{ time_field('break_end', 'Окончание перерыва') }}
+      </div>
+    </fieldset>
+    <div class="form-actions"><button class="button button-primary" type="submit">Добавить слоты</button></div>
+  </form>
+  <aside class="help-panel">
+    <h2>Как выбрать время</h2>
+    <p>Указывайте московское время с шагом 30 минут, например 09:00 или 09:30. Если нужен перерыв, заполните оба поля.</p>
+  </aside>
+</div>
+{% elif clinic %}
+<section class="panel empty-state"><h2>В этой поликлинике нет врачей</h2><p>Выберите другую поликлинику.</p></section>
+{% endif %}
+{% else %}
+<section class="panel empty-state"><h2>Поликлиники пока не добавлены</h2><p>Для знакомства с сервисом запустите приложение с параметром <code>--demo</code> на пустой базе.</p></section>
+{% endif %}
+{% endblock %}

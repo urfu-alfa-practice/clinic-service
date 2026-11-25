@@ -17,10 +17,21 @@ from app.models import (
     AppointmentStatus,
     EntityId,
     PatientCreate,
+    ScheduleCreate,
     VisitComplete,
     local_today,
 )
 from app.repository import ClinicRepository
+
+SCHEDULE_FIELD_ERRORS = {
+    "clinic_id": "Выберите поликлинику из списка.",
+    "doctor_id": "Выберите врача из списка этой поликлиники.",
+    "day": "Укажите существующую дату.",
+    "start": "Укажите время начала рабочего интервала.",
+    "end": "Укажите время окончания рабочего интервала.",
+    "break_start": "Укажите время начала перерыва.",
+    "break_end": "Укажите время окончания перерыва.",
+}
 
 
 def field_errors(error: ValidationError) -> dict[str, str]:
@@ -89,6 +100,89 @@ def create_web_router(repository: ClinicRepository, templates: Jinja2Templates) 
             clinic=selected_clinic,
             day=selected_day,
             slots=slots,
+            notice="Слоты добавлены в расписание."
+            if request.query_params.get("notice") == "schedule-added"
+            else None,
+        )
+
+    def schedule_form(
+        request: Request,
+        values: dict[str, str],
+        errors: dict[str, str],
+        *,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        clinics = repository.list_clinics()
+        clinic = next((item for item in clinics if str(item.id) == values.get("clinic_id")), None)
+        if clinic is None and "clinic_id" not in values and clinics:
+            clinic = clinics[0]
+        if clinic is None and "clinic_id" in values:
+            errors.setdefault("clinic_id", SCHEDULE_FIELD_ERRORS["clinic_id"])
+        return render(
+            request,
+            "schedule_form.html",
+            status_code=status_code,
+            nav="schedule_management",
+            values=values,
+            errors=errors,
+            clinics=clinics,
+            clinic=clinic,
+            doctors=repository.list_doctors(clinic.id) if clinic else [],
+            today=local_today(),
+        )
+
+    @router.get("/schedule/manage", response_class=HTMLResponse)
+    def manage_schedule(request: Request, clinic_id: EntityId | None = None) -> HTMLResponse:
+        values = {"day": (local_today() + timedelta(days=1)).isoformat()}
+        errors: dict[str, str] = {}
+        if clinic_id is not None:
+            values["clinic_id"] = str(clinic_id)
+            try:
+                repository.get_clinic(clinic_id)
+            except NotFoundError as error:
+                errors["clinic_id"] = str(error)
+        return schedule_form(request, values, errors, status_code=404 if errors else 200)
+
+    @router.post("/schedule/manage", response_model=None)
+    def add_schedule(
+        request: Request,
+        clinic_id: Annotated[str, Form()] = "",
+        doctor_id: Annotated[str, Form()] = "",
+        day: Annotated[str, Form()] = "",
+        start: Annotated[str, Form()] = "",
+        end: Annotated[str, Form()] = "",
+        break_start: Annotated[str, Form()] = "",
+        break_end: Annotated[str, Form()] = "",
+    ) -> HTMLResponse | RedirectResponse:
+        values = {
+            "clinic_id": clinic_id,
+            "doctor_id": doctor_id,
+            "day": day,
+            "start": start,
+            "end": end,
+            "break_start": break_start,
+            "break_end": break_end,
+        }
+        try:
+            data = ScheduleCreate.model_validate(values)
+        except ValidationError as error:
+            errors: dict[str, str] = {}
+            for item in error.errors():
+                field = str(item["loc"][0]) if item["loc"] else "interval"
+                if item["type"] == "value_error":
+                    errors[field] = str(item["ctx"]["error"])
+                else:
+                    errors[field] = SCHEDULE_FIELD_ERRORS[field]
+            return schedule_form(request, values, errors, status_code=422)
+        try:
+            repository.create_schedule(data)
+        except NotFoundError as error:
+            return schedule_form(request, values, {"doctor_id": str(error)}, status_code=422)
+        except ConflictError as error:
+            return schedule_form(request, values, {"interval": str(error)}, status_code=409)
+        return RedirectResponse(
+            f"/?clinic_id={data.clinic_id}&date={data.day.isoformat()}&notice=schedule-added",
+            status_code=303,
         )
 
     @router.get("/patients", response_class=HTMLResponse)

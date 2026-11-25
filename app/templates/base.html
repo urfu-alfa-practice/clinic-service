@@ -18,6 +18,7 @@
         </a>
         <nav aria-label="Главное меню">
           <a href="/" {% if nav == 'schedule' %}aria-current="page"{% endif %}>Расписание</a>
+          <a href="/schedule/manage" {% if nav == 'schedule_management' %}aria-current="page"{% endif %}>Управление расписанием</a>
           <a href="/appointments" {% if nav == 'appointments' %}aria-current="page"{% endif %}>Приёмы</a>
           <a href="/patients" {% if nav == 'patients' %}aria-current="page"{% endif %}>Пациенты</a>
         </nav>

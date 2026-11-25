@@ -101,6 +101,8 @@ input::placeholder { color: #718583; opacity: 1; }
 .field-hint { color: var(--muted); font-size: 11px; margin-top: 10px; }
 .field-hint a { color: var(--accent); }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.schedule-fieldset { min-width: 0; padding: 0; border: 0; margin: 0; }
+.schedule-fieldset legend { padding: 0; margin-bottom: 10px; font-weight: 650; }
 .form-actions { display: flex; gap: 12px; padding-top: 23px; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .help-panel { padding: 18px 4px; }
 .help-panel p { color: var(--muted); font-size: 13px; margin: 18px 0; }
@@ -139,7 +141,7 @@ dd a { color: var(--accent); }
 @media (max-width: 760px) {
   .container { padding-left: 20px; padding-right: 20px; }
   .header-inner { padding: 15px 20px 0; flex-wrap: wrap; gap: 12px; }
-  nav { width: 100%; gap: 25px; min-height: 45px; }
+  nav { width: 100%; flex-wrap: wrap; gap: 0 20px; min-height: 45px; }
   main { padding-top: 30px; }
   .page-heading { align-items: flex-start; flex-direction: column; gap: 18px; }
   .toolbar { flex-wrap: wrap; }

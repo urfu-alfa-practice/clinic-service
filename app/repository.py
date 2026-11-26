@@ -145,6 +145,13 @@ class ClinicRepository:
             ).fetchall()
         return [Doctor.model_validate(dict(row)) for row in rows]
 
+    def get_doctor(self, doctor_id: int) -> Doctor:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM doctors WHERE id = ?", (doctor_id,)).fetchone()
+        if row is None:
+            raise NotFoundError("Врач не найден.")
+        return Doctor.model_validate(dict(row))
+
     def list_slots(self, clinic_id: int, day: date) -> list[Slot]:
         self.get_clinic(clinic_id)
         start = datetime.combine(day, time.min, LOCAL_TIMEZONE)
@@ -159,6 +166,68 @@ class ClinicRepository:
                 (clinic_id, timestamp(start_utc), timestamp(end)),
             ).fetchall()
         return [Slot.model_validate(dict(row)) for row in rows]
+
+    def create_schedule(
+        self,
+        clinic_id: int,
+        doctor_id: int,
+        intervals: list[tuple[datetime, datetime]],
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        if not intervals:
+            raise ConflictError(
+                "После исключения перерыва не остаётся времени для создания слотов."
+            )
+        current = now if now is not None else datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute("SELECT 1 FROM clinics WHERE id = ?", (clinic_id,)).fetchone()
+                is None
+            ):
+                raise NotFoundError("Поликлиника не найдена.")
+            doctor = connection.execute(
+                "SELECT clinic_id FROM doctors WHERE id = ?", (doctor_id,)
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Врач не найден.")
+            if doctor["clinic_id"] != clinic_id:
+                raise ConflictError("Врач не закреплён за выбранной поликлиникой.")
+            if any(start <= current for start, _ in intervals):
+                raise ConflictError(
+                    "Нельзя создать расписание: время хотя бы одного слота уже началось или прошло."
+                )
+            for start, end in intervals:
+                overlap = connection.execute(
+                    """
+                    SELECT starts_at, ends_at FROM slots
+                    WHERE doctor_id = ? AND starts_at < ? AND ends_at > ? LIMIT 1
+                    """,
+                    (doctor_id, timestamp(end), timestamp(start)),
+                ).fetchone()
+                if overlap is not None:
+                    existing_start = datetime.fromisoformat(overlap["starts_at"]).astimezone(
+                        LOCAL_TIMEZONE
+                    )
+                    existing_end = datetime.fromisoformat(overlap["ends_at"]).astimezone(
+                        LOCAL_TIMEZONE
+                    )
+                    raise ConflictError(
+                        "Новый слот пересекается с существующим временем врача "
+                        f"{existing_start:%d.%m.%Y} {existing_start:%H:%M}–{existing_end:%H:%M}."
+                    )
+            try:
+                connection.executemany(
+                    "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                    [(doctor_id, timestamp(start), timestamp(end)) for start, end in intervals],
+                )
+            except sqlite3.Error as error:
+                raise ConflictError(
+                    "Не удалось сохранить расписание из-за конфликта времени. "
+                    "Проверьте слоты и повторите."
+                ) from error
+        return len(intervals)
 
     def get_slot(self, slot_id: int) -> Slot:
         with self._connect() as connection:

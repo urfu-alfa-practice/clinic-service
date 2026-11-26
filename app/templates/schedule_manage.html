@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Управление расписанием{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>Управление расписанием</h1>
+    <p class="subtitle">Добавьте время приёма врача на одну дату. Новые слоты сразу станут доступны для записи.</p>
+  </div>
+</div>
+<form class="panel form-panel schedule-form" action="/schedule/manage" method="post" aria-labelledby="schedule-form-heading">
+  <button class="sr-only" id="schedule-implicit-submit" type="submit" tabindex="-1" aria-hidden="true">Добавить расписание</button>
+  <h2 id="schedule-form-heading">Новый рабочий интервал</h2>
+  {% if error %}<div class="alert alert-error spaced" role="alert">{{ error }}</div>{% elif errors %}<div class="alert alert-error spaced" role="alert">Проверьте отмеченные поля. Введённые данные сохранены в форме.</div>{% endif %}
+  <div class="form-row">
+    <div class="field">
+      <label for="clinic_id">Поликлиника <span class="required">*</span></label>
+      <select id="clinic_id" name="clinic_id" required {% if errors.get('clinic_id') %}aria-invalid="true" aria-describedby="clinic_id-error"{% endif %}>
+        <option value="">Выберите поликлинику</option>
+        {% for item in clinics %}<option value="{{ item.id }}" {% if values.get('clinic_id') == item.id | string %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
+      </select>
+      {% if errors.get('clinic_id') %}<p class="field-error" id="clinic_id-error">{{ errors.clinic_id }}</p>{% endif %}
+    </div>
+    <div class="field">
+      <label for="doctor_id">Врач <span class="required">*</span></label>
+      <select id="doctor_id" name="doctor_id" required aria-describedby="doctor-id-hint{% if errors.get('doctor_id') %} doctor_id-error{% endif %}" {% if errors.get('doctor_id') %}aria-invalid="true"{% endif %}>
+        <option value="">Выберите врача</option>
+        {% for doctor in doctors %}<option value="{{ doctor.id }}" {% if values.get('doctor_id') == doctor.id | string %}selected{% endif %}>{{ doctor.full_name }} · {{ doctor.specialty }}</option>{% endfor %}
+      </select>
+      <p class="field-hint" id="doctor-id-hint">Список содержит только врачей выбранной поликлиники.</p>
+      {% if errors.get('doctor_id') %}<p class="field-error" id="doctor_id-error">{{ errors.doctor_id }}</p>{% endif %}
+    </div>
+  </div>
+  <div class="schedule-refresh"><button class="button button-secondary" type="submit" formmethod="get" formnovalidate>Показать врачей</button></div>
+  <div class="field">
+    <label for="date">Дата приёма <span class="required">*</span></label>
+    <input id="date" name="date" type="date" value="{{ values.get('date', '') }}" min="{{ today.isoformat() }}" required aria-describedby="date-hint{% if errors.get('date') %} date-error{% endif %}" {% if errors.get('date') %}aria-invalid="true"{% endif %}>
+    <p class="field-hint" id="date-hint">Допустимы сегодняшняя и будущие даты. Каждый слот должен начинаться позже текущего момента.</p>
+    {% if errors.get('date') %}<p class="field-error" id="date-error">{{ errors.date }}</p>{% endif %}
+  </div>
+  <fieldset class="schedule-fieldset">
+    <legend>Рабочий интервал <span class="required">*</span></legend>
+    <p class="field-hint schedule-fieldset-hint" id="work-interval-hint">Используйте :00 или :30 по московскому времени. Интервал делится на слоты по 30 минут. Нельзя добавить уже начавшееся или пересекающееся время; соседние интервалы допустимы.</p>
+    <div class="form-row">
+      <div class="field">
+        <label for="start_time">Начало</label>
+        <input id="start_time" name="start_time" type="time" step="1800" value="{{ values.get('start_time', '') }}" required aria-describedby="work-interval-hint{% if errors.get('start_time') %} start_time-error{% endif %}" {% if errors.get('start_time') %}aria-invalid="true"{% endif %}>
+        {% if errors.get('start_time') %}<p class="field-error" id="start_time-error">{{ errors.start_time }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="end_time">Окончание</label>
+        <input id="end_time" name="end_time" type="time" step="1800" value="{{ values.get('end_time', '') }}" required aria-describedby="work-interval-hint{% if errors.get('end_time') %} end_time-error{% endif %}" {% if errors.get('end_time') %}aria-invalid="true"{% endif %}>
+        {% if errors.get('end_time') %}<p class="field-error" id="end_time-error">{{ errors.end_time }}</p>{% endif %}
+      </div>
+    </div>
+  </fieldset>
+  <fieldset class="schedule-fieldset">
+    <legend>Перерыв <span class="optional">необязательно</span></legend>
+    <p class="field-hint schedule-fieldset-hint" id="break-hint">Заполните обе границы на :00 или :30 либо оставьте их пустыми. Перерыв должен быть положительным и целиком находиться внутри рабочего интервала; его время будет исключено из расписания.</p>
+    <div class="form-row">
+      <div class="field">
+        <label for="break_start">Начало</label>
+        <input id="break_start" name="break_start" type="time" step="1800" value="{{ values.get('break_start', '') }}" aria-describedby="break-hint{% if errors.get('break_start') %} break_start-error{% endif %}" {% if errors.get('break_start') %}aria-invalid="true"{% endif %}>
+        {% if errors.get('break_start') %}<p class="field-error" id="break_start-error">{{ errors.break_start }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="break_end">Окончание</label>
+        <input id="break_end" name="break_end" type="time" step="1800" value="{{ values.get('break_end', '') }}" aria-describedby="break-hint{% if errors.get('break_end') %} break_end-error{% endif %}" {% if errors.get('break_end') %}aria-invalid="true"{% endif %}>
+        {% if errors.get('break_end') %}<p class="field-error" id="break_end-error">{{ errors.break_end }}</p>{% endif %}
+      </div>
+    </div>
+  </fieldset>
+  <p class="field-hint schedule-preservation-note">Существующие слоты и записи пациентов не изменяются.</p>
+  <div class="form-actions"><button class="button button-primary" type="submit">Добавить расписание</button><a class="button button-secondary" href="/">Отмена</a></div>
+</form>
+{% endblock %}

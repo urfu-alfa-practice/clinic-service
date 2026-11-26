@@ -7,6 +7,18 @@ from app.models import LOCAL_TIMEZONE, local_today
 from app.repository import ClinicRepository
 
 
+def schedule_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "clinic_id": 1,
+        "doctor_id": 1,
+        "date": (local_today() + timedelta(days=5)).isoformat(),
+        "start_time": "09:00",
+        "end_time": "11:00",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_schedule_and_patient_card(client: TestClient, repository: ClinicRepository) -> None:
     assert len(client.get("/api/clinics").json()) == 2
     doctors = client.get("/api/doctors", params={"clinic_id": 1}).json()
@@ -166,10 +178,67 @@ def test_invalid_query(client: TestClient, path: str) -> None:
     assert client.get(path).status_code == 422
 
 
+def test_create_schedule(client: TestClient, repository: ClinicRepository) -> None:
+    payload = schedule_payload()
+    response = client.post("/api/schedule", json=payload)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["skipped_past"] == 0
+    assert len(body["slots"]) == 4
+    assert response.headers["location"] == (f"/api/slots?clinic_id=1&date={payload['date']}")
+    listed = client.get("/api/slots", params={"clinic_id": 1, "date": payload["date"]}).json()
+    assert {slot["id"] for slot in listed} == {slot["id"] for slot in body["slots"]}
+
+
+def test_create_schedule_conflict_returns_slots(client: TestClient) -> None:
+    day = schedule_payload()["date"]
+    first = client.post(
+        "/api/schedule", json=schedule_payload(start_time="09:00", end_time="10:00")
+    )
+    assert first.status_code == 201
+    response = client.post(
+        "/api/schedule", json=schedule_payload(start_time="09:30", end_time="10:30")
+    )
+    assert response.status_code == 409
+    body = response.json()
+    assert "уже есть слоты" in body["detail"]
+    assert [slot["starts_at"] for slot in body["conflicts"]] == [
+        first.json()["slots"][1]["starts_at"]
+    ]
+    listed = client.get("/api/slots", params={"clinic_id": 1, "date": day}).json()
+    assert len(listed) == len(first.json()["slots"])
+
+
+@pytest.mark.parametrize(
+    "payload,status",
+    [
+        ({"clinic_id": 999}, 404),
+        ({"doctor_id": 999}, 404),
+        ({"doctor_id": 3}, 404),
+        ({"start_time": "09:15"}, 422),
+        ({"end_time": "11:15"}, 422),
+        ({"break_start": "10:00"}, 422),
+        ({"break_end": "10:30"}, 422),
+        ({"break_start": "09:00", "break_end": "09:30"}, 422),
+        ({"start_time": "11:00", "end_time": "09:00"}, 422),
+        ({"date": (local_today() - timedelta(days=1)).isoformat()}, 422),
+    ],
+)
+def test_invalid_schedule(client: TestClient, payload: dict[str, object], status: int) -> None:
+    response = client.post("/api/schedule", json=schedule_payload(**payload))
+    assert response.status_code == status
+    assert "detail" in response.json()
+    assert (
+        client.get("/api/slots", params={"clinic_id": 1, "date": schedule_payload()["date"]}).json()
+        == []
+    )
+
+
 def test_openapi(client: TestClient) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
     assert "/api/appointments/{appointment_id}/complete" in response.json()["paths"]
+    assert "/api/schedule" in response.json()["paths"]
 
 
 def test_date_without_schedule(client: TestClient) -> None:

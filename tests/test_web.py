@@ -1,7 +1,9 @@
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.models import LOCAL_TIMEZONE
+from app.models import LOCAL_TIMEZONE, local_today
 from app.repository import ClinicRepository
 
 
@@ -124,3 +126,96 @@ def test_styles_are_local(client: TestClient) -> None:
     assert "--accent:" in response.text
     text = client.get("/").text
     assert "<script" not in text
+
+
+def manage_payload(**overrides: str) -> dict[str, str]:
+    payload = {
+        "clinic_id": "1",
+        "doctor_id": "1",
+        "date": (local_today() + timedelta(days=5)).isoformat(),
+        "start_time": "09:00",
+        "end_time": "11:00",
+        "break_start": "",
+        "break_end": "",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_schedule_manage_page_shows_clinic_doctors(client: TestClient) -> None:
+    response = client.get("/schedule/manage")
+    assert response.status_code == 200
+    assert "Управление расписанием" in response.text
+    assert 'name="doctor_id"' in response.text
+    assert "Соколова Анна Сергеевна" in response.text
+    assert "Орлов Иван Петрович" in response.text
+    assert "Белов Игорь Олегович" not in response.text
+    other = client.get("/schedule/manage", params={"clinic_id": "2"})
+    assert "Белов Игорь Олегович" in other.text
+    assert "Соколова Анна Сергеевна" not in other.text
+
+
+def test_schedule_manage_creates_slots(client: TestClient, repository: ClinicRepository) -> None:
+    payload = manage_payload()
+    response = client.post("/schedule/manage", data=payload, follow_redirects=False)
+    assert response.status_code == 303
+    assert "notice=schedule_created" in response.headers["location"]
+    page = client.get(response.headers["location"])
+    assert "Создано слотов: 4." in page.text
+    slots = repository.list_slots(1, local_today() + timedelta(days=5))
+    assert len(slots) == 4
+
+
+def test_schedule_manage_validation_preserves_values(client: TestClient) -> None:
+    payload = manage_payload(start_time="09:15")
+    response = client.post("/schedule/manage", data=payload)
+    assert response.status_code == 422
+    assert 'value="09:15"' in response.text
+    assert 'value="11:00"' in response.text
+    assert "кратно 30 минутам" in response.text
+    assert 'aria-invalid="true"' in response.text
+    assert response.text.count('name="doctor_id"') == 1
+
+
+def test_schedule_manage_conflict_stays_on_form(client: TestClient) -> None:
+    first = client.post(
+        "/schedule/manage",
+        data=manage_payload(start_time="09:00", end_time="10:00"),
+        follow_redirects=False,
+    )
+    assert first.status_code == 303
+    response = client.post(
+        "/schedule/manage",
+        data=manage_payload(start_time="09:30", end_time="10:30"),
+    )
+    assert response.status_code == 409
+    assert "уже есть слоты" in response.text
+    assert "Конфликтующие слоты" in response.text
+    assert "09:30" in response.text
+    assert 'value="09:30"' in response.text
+
+
+def test_schedule_manage_doctor_from_other_clinic(client: TestClient) -> None:
+    response = client.post(
+        "/schedule/manage",
+        data=manage_payload(doctor_id="3"),
+    )
+    assert response.status_code == 404
+    assert "Врач не найден в выбранной поликлинике." in response.text
+    assert 'name="doctor_id"' in response.text
+
+
+def test_schedule_page_links_to_management(client: TestClient) -> None:
+    assert 'href="/schedule/manage"' in client.get("/").text
+
+
+def test_cross_site_schedule_manage_rejected(
+    client: TestClient, repository: ClinicRepository
+) -> None:
+    response = client.post(
+        "/schedule/manage",
+        data=manage_payload(),
+        headers={"Origin": "https://other.example"},
+    )
+    assert response.status_code == 403
+    assert repository.list_slots(1, local_today() + timedelta(days=5)) == []

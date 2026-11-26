@@ -9,6 +9,7 @@ from pathlib import Path
 from app.errors import ConflictError, NotFoundError
 from app.models import (
     LOCAL_TIMEZONE,
+    SLOT_DURATION,
     Appointment,
     AppointmentCreate,
     AppointmentStatus,
@@ -17,6 +18,8 @@ from app.models import (
     LabResult,
     Patient,
     PatientCreate,
+    ScheduleCreate,
+    ScheduleCreation,
     Slot,
     VisitComplete,
     local_today,
@@ -166,6 +169,99 @@ class ClinicRepository:
         if row is None:
             raise NotFoundError("Время приёма не найдено.")
         return Slot.model_validate(dict(row))
+
+    def create_schedule(self, data: ScheduleCreate) -> ScheduleCreation:
+        day = data.date
+        interval_start = datetime.combine(day, data.start_time, LOCAL_TIMEZONE)
+        interval_end = datetime.combine(day, data.end_time, LOCAL_TIMEZONE)
+        break_start = (
+            datetime.combine(day, data.break_start, LOCAL_TIMEZONE)
+            if data.break_start is not None
+            else None
+        )
+        break_end = (
+            datetime.combine(day, data.break_end, LOCAL_TIMEZONE)
+            if data.break_end is not None
+            else None
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM clinics WHERE id = ?", (data.clinic_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("Поликлиника не найдена.")
+            doctor = connection.execute(
+                "SELECT clinic_id FROM doctors WHERE id = ?", (data.doctor_id,)
+            ).fetchone()
+            if doctor is None:
+                raise NotFoundError("Врач не найден.")
+            if doctor["clinic_id"] != data.clinic_id:
+                raise NotFoundError("Врач не найден в выбранной поликлинике.")
+
+            rows = connection.execute(
+                SLOT_SELECT
+                + " WHERE s.doctor_id = ? AND s.starts_at < ? AND s.ends_at > ?"
+                + " ORDER BY s.starts_at, s.id",
+                (data.doctor_id, timestamp(interval_end), timestamp(interval_start)),
+            ).fetchall()
+            conflicts = [Slot.model_validate(dict(row)) for row in rows]
+            if conflicts:
+                break_conflict = (
+                    break_start is not None
+                    and break_end is not None
+                    and any(
+                        slot.starts_at < break_end and slot.ends_at > break_start
+                        for slot in conflicts
+                    )
+                )
+                message = (
+                    "Перерыв пересекается с существующими слотами врача."
+                    if break_conflict
+                    else "В выбранном интервале уже есть слоты врача."
+                )
+                raise ConflictError(message, conflicts=conflicts)
+
+            now = datetime.now(UTC)
+            candidates: list[datetime] = []
+            skipped_past = 0
+            cursor = interval_start
+            while cursor + SLOT_DURATION <= interval_end:
+                slot_end = cursor + SLOT_DURATION
+                in_break = (
+                    break_start is not None
+                    and break_end is not None
+                    and cursor < break_end
+                    and slot_end > break_start
+                )
+                if not in_break:
+                    if cursor > now:
+                        candidates.append(cursor)
+                    else:
+                        skipped_past += 1
+                cursor = slot_end
+
+            if not candidates:
+                raise ConflictError("В выбранном интервале не осталось будущих слотов.")
+
+            created_ids: list[int] = []
+            for start in candidates:
+                result = connection.execute(
+                    "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                    (data.doctor_id, timestamp(start), timestamp(start + SLOT_DURATION)),
+                )
+                assert result.lastrowid is not None
+                created_ids.append(result.lastrowid)
+
+            placeholders = ", ".join("?" for _ in created_ids)
+            rows = connection.execute(
+                SLOT_SELECT + f" WHERE s.id IN ({placeholders}) ORDER BY s.starts_at, s.id",
+                created_ids,
+            ).fetchall()
+            slots = [Slot.model_validate(dict(row)) for row in rows]
+        return ScheduleCreation(slots=slots, skipped_past=skipped_past)
 
     def list_patients(self) -> list[Patient]:
         with self._connect() as connection:

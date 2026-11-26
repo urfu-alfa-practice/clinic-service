@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Управление расписанием{% endblock %}
+{% block content %}
+<a class="back-link" href="/">← К расписанию</a>
+<div class="page-heading">
+  <div>
+    <h1>Управление расписанием</h1>
+    <p class="subtitle">Добавьте врачу рабочий интервал — система создаст получасовые слоты для записи пациентов.</p>
+  </div>
+</div>
+<div class="detail-layout">
+  <form class="panel form-panel" action="/schedule/manage" method="post">
+    {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+    {% if errors.get('__all__') %}<p class="field-error">{{ errors['__all__'] }}</p>{% endif %}
+
+    <div class="form-row">
+      <div class="field">
+        <label for="clinic_id">Поликлиника <span class="required">*</span></label>
+        <select id="clinic_id" name="clinic_id" required {% if errors.get('clinic_id') %}aria-invalid="true" aria-describedby="clinic_id-error"{% endif %}>
+          {% for item in clinics %}<option value="{{ item.id }}" {% if values.get('clinic_id') == item.id|string %}selected{% endif %}>{{ item.name }} · {{ item.address }}</option>{% endfor %}
+        </select>
+        {% if errors.get('clinic_id') %}<p class="field-error" id="clinic_id-error">{{ errors.clinic_id }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="doctor_id">Врач <span class="required">*</span></label>
+        <select id="doctor_id" name="doctor_id" required {% if errors.get('doctor_id') %}aria-invalid="true" aria-describedby="doctor_id-error"{% endif %}>
+          {% if not doctors %}<option value="">Сначала выберите поликлинику</option>{% endif %}
+          {% for doctor in doctors %}<option value="{{ doctor.id }}" {% if values.get('doctor_id') == doctor.id|string %}selected{% endif %}>{{ doctor.full_name }} · {{ doctor.specialty }}</option>{% endfor %}
+        </select>
+        {% if errors.get('doctor_id') %}<p class="field-error" id="doctor_id-error">{{ errors.doctor_id }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="date">Дата приёма <span class="required">*</span></label>
+      <input id="date" name="date" type="date" min="{{ today.isoformat() }}" value="{{ values.get('date', '') }}" required {% if errors.get('date') %}aria-invalid="true" aria-describedby="date-error"{% endif %}>
+      {% if errors.get('date') %}<p class="field-error" id="date-error">{{ errors.date }}</p>{% endif %}
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="start_time">Начало интервала <span class="required">*</span></label>
+        <input id="start_time" name="start_time" type="time" step="1800" value="{{ values.get('start_time', '') }}" required {% if errors.get('start_time') %}aria-invalid="true" aria-describedby="start_time-error"{% endif %}>
+        {% if errors.get('start_time') %}<p class="field-error" id="start_time-error">{{ errors.start_time }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="end_time">Окончание интервала <span class="required">*</span></label>
+        <input id="end_time" name="end_time" type="time" step="1800" value="{{ values.get('end_time', '') }}" required {% if errors.get('end_time') %}aria-invalid="true" aria-describedby="end_time-error"{% endif %}>
+        {% if errors.get('end_time') %}<p class="field-error" id="end_time-error">{{ errors.end_time }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="break_start">Начало перерыва <span class="optional">необязательно</span></label>
+        <input id="break_start" name="break_start" type="time" step="1800" value="{{ values.get('break_start', '') }}" {% if errors.get('break_start') %}aria-invalid="true" aria-describedby="break_start-error"{% endif %}>
+        {% if errors.get('break_start') %}<p class="field-error" id="break_start-error">{{ errors.break_start }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="break_end">Окончание перерыва <span class="optional">необязательно</span></label>
+        <input id="break_end" name="break_end" type="time" step="1800" value="{{ values.get('break_end', '') }}" {% if errors.get('break_end') %}aria-invalid="true" aria-describedby="break_end-error"{% endif %}>
+        {% if errors.get('break_end') %}<p class="field-error" id="break_end-error">{{ errors.break_end }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="button button-primary" type="submit">Создать слоты</button>
+      <button class="button button-secondary" type="submit" formaction="/schedule/manage" formmethod="get" formnovalidate>Показать врачей</button>
+      <a class="button button-secondary" href="/">Отмена</a>
+    </div>
+    <p class="field-hint">Время указывается по Москве (UTC+3). Начало и окончание интервала и перерыва должны быть кратны 30 минутам.</p>
+  </form>
+
+  <aside class="stack">
+    {% if conflicts %}
+    <section class="panel" aria-labelledby="conflicts-heading">
+      <div class="panel-heading">
+        <h2 id="conflicts-heading">Конфликтующие слоты</h2>
+        <span class="badge badge-cancelled">{{ conflicts | length }}</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption class="sr-only">Слоты, которые пересекаются с выбранным интервалом</caption>
+          <thead><tr><th scope="col">Время</th><th scope="col">Статус</th></tr></thead>
+          <tbody>
+          {% for slot in conflicts %}
+            <tr>
+              <td class="time-cell">{{ slot.starts_at | local_time }} <span class="muted">— {{ slot.ends_at | local_time }}</span></td>
+              <td>{% if slot.appointment_id %}<span class="badge badge-scheduled">Есть запись</span>{% else %}<span class="badge badge-cancelled">Занято</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+    <section class="panel summary-panel">
+      <p class="eyebrow">Как это работает</p>
+      <p>Система создаёт слоты по 30 минут. Если в выбранном интервале уже есть слоты врача, запрос отклоняется целиком: существующие слоты и записи пациентов остаются без изменений.</p>
+      <p>Для сегодняшней даты создаются только слоты, которые ещё не начались. Прошедшее время пропускается.</p>
+      <p>Перерыв должен находиться внутри интервала и оставлять хотя бы один слот до и после него.</p>
+    </section>
+  </aside>
+</div>
+{% endblock %}

@@ -69,6 +69,11 @@ def create_app(database_path: Path | None = None, *, demo: bool = False) -> Fast
 
     @app.exception_handler(ConflictError)
     async def conflict(request: Request, error: ConflictError) -> Response:
+        if request.url.path.startswith("/api/"):
+            payload: dict[str, object] = {"detail": str(error)}
+            if error.conflicts:
+                payload["conflicts"] = [slot.model_dump(mode="json") for slot in error.conflicts]
+            return JSONResponse(payload, status_code=409)
         return error_response(request, 409, str(error))
 
     @app.exception_handler(RequestValidationError)

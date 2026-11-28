@@ -17,6 +17,7 @@ from app.models import (
     LabResult,
     Patient,
     PatientCreate,
+    ScheduleCreate,
     Slot,
     VisitComplete,
     local_today,
@@ -166,6 +167,68 @@ class ClinicRepository:
         if row is None:
             raise NotFoundError("Время приёма не найдено.")
         return Slot.model_validate(dict(row))
+
+    def add_schedule(self, data: ScheduleCreate) -> list[Slot]:
+        start = datetime.combine(data.day, data.start_time, LOCAL_TIMEZONE).astimezone(UTC)
+        end = datetime.combine(data.day, data.end_time, LOCAL_TIMEZONE).astimezone(UTC)
+        break_start = (
+            datetime.combine(data.day, data.break_start, LOCAL_TIMEZONE).astimezone(UTC)
+            if data.break_start is not None
+            else None
+        )
+        break_end = (
+            datetime.combine(data.day, data.break_end, LOCAL_TIMEZONE).astimezone(UTC)
+            if data.break_end is not None
+            else None
+        )
+        conflict = "Этот интервал пересекается с уже существующим расписанием врача."
+        with self._connect() as connection:
+            # Проверки и вставка под одной блокировкой: два запроса не создадут пересечение.
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM clinics WHERE id = ?", (data.clinic_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("Поликлиника не найдена.")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM doctors WHERE id = ? AND clinic_id = ?",
+                    (data.doctor_id, data.clinic_id),
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("Врач не найден в выбранной поликлинике.")
+            overlap = connection.execute(
+                """SELECT 1 FROM slots
+                   WHERE doctor_id = ? AND starts_at < ? AND ends_at > ? LIMIT 1""",
+                (data.doctor_id, timestamp(end), timestamp(start)),
+            ).fetchone()
+            if overlap:
+                raise ConflictError(conflict)
+            created_ids: list[int] = []
+            current = start
+            while current < end:
+                slot_end = current + timedelta(minutes=30)
+                in_break = (
+                    break_start is not None
+                    and break_end is not None
+                    and current < break_end
+                    and slot_end > break_start
+                )
+                if not in_break:
+                    try:
+                        cursor = connection.execute(
+                            "INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (?, ?, ?)",
+                            (data.doctor_id, timestamp(current), timestamp(slot_end)),
+                        )
+                    except sqlite3.IntegrityError as error:
+                        raise ConflictError(conflict) from error
+                    assert cursor.lastrowid is not None
+                    created_ids.append(cursor.lastrowid)
+                current = slot_end
+        return [self.get_slot(slot_id) for slot_id in created_ids]
 
     def list_patients(self) -> list[Patient]:
         with self._connect() as connection:

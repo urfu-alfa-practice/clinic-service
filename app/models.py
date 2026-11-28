@@ -1,10 +1,10 @@
 """Общие модели и правила ввода для API, HTML-форм и хранилища."""
 
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 LOCAL_TIMEZONE = timezone(timedelta(hours=3), name="МСК")
 NAME_MAX_LENGTH = 120
@@ -102,6 +102,47 @@ class AppointmentStatus(StrEnum):
 class AppointmentCreate(InputModel):
     slot_id: EntityId
     patient_id: EntityId
+
+
+class ScheduleCreate(InputModel):
+    clinic_id: EntityId
+    doctor_id: EntityId
+    day: date = Field(alias="date")
+    start_time: time
+    end_time: time
+    break_start: time | None = None
+    break_end: time | None = None
+
+    @field_validator("start_time", "end_time", "break_start", "break_end", mode="before")
+    @classmethod
+    def validate_slot_time(cls, value: object) -> object:
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str):
+            return value
+        try:
+            parsed = time.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("Укажите время в формате ЧЧ:ММ без секунд.") from error
+        if parsed.second or parsed.microsecond or parsed.minute % 30:
+            raise ValueError("Время должно быть кратно 30 минутам: минуты 00 или 30, без секунд.")
+        return parsed
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> Self:
+        if self.end_time <= self.start_time:
+            raise ValueError("Окончание рабочего интервала должно быть позже начала.")
+        if (self.break_start is None) != (self.break_end is None):
+            raise ValueError("Укажите и начало, и окончание перерыва.")
+        if self.break_start is not None and self.break_end is not None:
+            if self.break_end <= self.break_start:
+                raise ValueError("Окончание перерыва должно быть позже начала.")
+            if self.break_start < self.start_time or self.break_end > self.end_time:
+                raise ValueError("Перерыв должен быть внутри рабочего интервала.")
+        start = datetime.combine(self.day, self.start_time, LOCAL_TIMEZONE)
+        if self.day < local_today() or start.astimezone(UTC) <= datetime.now(UTC):
+            raise ValueError("Расписание можно добавлять только на будущее время.")
+        return self
 
 
 class VisitComplete(InputModel):

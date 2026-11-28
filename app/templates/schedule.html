@@ -8,6 +8,7 @@
   </div>
   <a class="button button-secondary" href="/patients/new"><span aria-hidden="true">+</span> Новый пациент</a>
 </div>
+{% if notice %}<div class="alert alert-success" role="status">{{ notice }}</div>{% endif %}
 {% if clinics %}
 <form class="toolbar panel" action="/" method="get">
   <div class="field clinic-field">

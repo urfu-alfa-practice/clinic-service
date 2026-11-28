@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Управление расписанием{% endblock %}
+{% block content %}
+<a class="back-link" href="/">← Расписание приёмов</a>
+<div class="page-heading">
+  <div>
+    <h1>Управление расписанием</h1>
+    <p class="subtitle">Добавьте рабочее время врача. Интервал делится на слоты по 30 минут.</p>
+  </div>
+</div>
+<div class="detail-layout">
+  <form class="panel form-panel" action="/schedule/manage" method="post">
+    {% if error or errors.get('form') %}<div class="alert alert-error" role="alert">{{ error or errors.get('form') }}</div>{% endif %}
+    {% if errors %}<p class="muted small">Проверьте отмеченные поля. Введённые данные сохранены в форме.</p>{% endif %}
+    <div class="form-row">
+      <div class="field">
+        <label for="clinic_id">Поликлиника <span class="required">*</span></label>
+        <select id="clinic_id" name="clinic_id" required {% if errors.get('clinic_id') %}aria-invalid="true" aria-describedby="clinic_id-error"{% endif %}>
+          <option value="">Выберите поликлинику</option>
+          {% for clinic in clinics %}<option value="{{ clinic.id }}" {% if values.get('clinic_id', '')|string == clinic.id|string %}selected{% endif %}>{{ clinic.name }} · {{ clinic.address }}</option>{% endfor %}
+        </select>
+        {% if errors.get('clinic_id') %}<p class="field-error" id="clinic_id-error">{{ errors.clinic_id }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="doctor_id">Врач <span class="required">*</span></label>
+        <select id="doctor_id" name="doctor_id" required {% if errors.get('doctor_id') %}aria-invalid="true" aria-describedby="doctor_id-error"{% endif %}>
+          <option value="">Выберите врача</option>
+          {% for clinic, doctors in doctor_groups %}
+          <optgroup label="{{ clinic.name }}">
+            {% for doctor in doctors %}<option value="{{ doctor.id }}" {% if values.get('doctor_id', '')|string == doctor.id|string %}selected{% endif %}>{{ doctor.full_name }} · {{ doctor.specialty }}</option>{% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        {% if errors.get('doctor_id') %}<p class="field-error" id="doctor_id-error">{{ errors.doctor_id }}</p>{% endif %}
+      </div>
+    </div>
+    <div class="field">
+      <label for="date">Дата приёма <span class="required">*</span></label>
+      <input id="date" name="date" type="date" value="{{ values.get('date', '') }}" min="{{ today.isoformat() }}" required {% if errors.get('date') %}aria-invalid="true" aria-describedby="date-error"{% endif %}>
+      {% if errors.get('date') %}<p class="field-error" id="date-error">{{ errors.date }}</p>{% endif %}
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="start_time">Начало интервала <span class="required">*</span></label>
+        <input id="start_time" name="start_time" type="time" step="1800" value="{{ values.get('start_time', '') }}" required {% if errors.get('start_time') %}aria-invalid="true" aria-describedby="start_time-error"{% endif %}>
+        {% if errors.get('start_time') %}<p class="field-error" id="start_time-error">{{ errors.start_time }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="end_time">Окончание интервала <span class="required">*</span></label>
+        <input id="end_time" name="end_time" type="time" step="1800" value="{{ values.get('end_time', '') }}" required {% if errors.get('end_time') %}aria-invalid="true" aria-describedby="end_time-error"{% endif %}>
+        {% if errors.get('end_time') %}<p class="field-error" id="end_time-error">{{ errors.end_time }}</p>{% endif %}
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="break_start">Перерыв: начало <span class="optional">необязательно</span></label>
+        <input id="break_start" name="break_start" type="time" step="1800" value="{{ values.get('break_start', '') }}" {% if errors.get('break_start') %}aria-invalid="true" aria-describedby="break_start-error"{% endif %}>
+        {% if errors.get('break_start') %}<p class="field-error" id="break_start-error">{{ errors.break_start }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="break_end">Перерыв: окончание <span class="optional">необязательно</span></label>
+        <input id="break_end" name="break_end" type="time" step="1800" value="{{ values.get('break_end', '') }}" {% if errors.get('break_end') %}aria-invalid="true" aria-describedby="break_end-error"{% endif %}>
+        {% if errors.get('break_end') %}<p class="field-error" id="break_end-error">{{ errors.break_end }}</p>{% endif %}
+      </div>
+    </div>
+    <p class="field-hint">Время указывается по московскому времени (UTC+3), шаг — 30 минут. Перерыв должен быть внутри рабочего интервала.</p>
+    <div class="form-actions">
+      <button class="button button-primary" type="submit">Создать слоты</button>
+      <a class="button button-secondary" href="/">Отмена</a>
+    </div>
+  </form>
+  <aside class="help-panel">
+    <p>Новые слоты сразу появятся в расписании и станут доступны для записи пациентов.</p>
+    <p>Уже созданные слоты и записи пациентов не изменяются.</p>
+  </aside>
+</div>
+{% endblock %}

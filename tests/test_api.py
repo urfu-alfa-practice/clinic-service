@@ -170,6 +170,7 @@ def test_openapi(client: TestClient) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
     assert "/api/appointments/{appointment_id}/complete" in response.json()["paths"]
+    assert "post" in response.json()["paths"]["/api/slots"]
 
 
 def test_date_without_schedule(client: TestClient) -> None:
@@ -179,3 +180,76 @@ def test_date_without_schedule(client: TestClient) -> None:
         ).json()
         == []
     )
+
+
+def schedule_payload(day: date, **overrides: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "clinic_id": 1,
+        "doctor_id": 1,
+        "date": day.isoformat(),
+        "start_time": "09:00",
+        "end_time": "11:00",
+    }
+    data.update(overrides)
+    return data
+
+
+def test_add_schedule(client: TestClient, repository: ClinicRepository) -> None:
+    day = local_today() + timedelta(days=3)
+    response = client.post("/api/slots", json=schedule_payload(day))
+    assert response.status_code == 201
+    slots = response.json()
+    assert len(slots) == 4
+    assert all(slot["is_available"] for slot in slots)
+    assert "clinic_id=1" in response.headers["location"]
+    assert f"date={day.isoformat()}" in response.headers["location"]
+    listed = client.get(response.headers["location"]).json()
+    assert {slot["id"] for slot in listed} == {slot["id"] for slot in slots}
+    assert len(repository.list_slots(1, day)) == 4
+
+
+def test_add_schedule_with_break(client: TestClient) -> None:
+    day = local_today() + timedelta(days=4)
+    response = client.post(
+        "/api/slots",
+        json=schedule_payload(day, break_start="09:30", break_end="10:00"),
+    )
+    assert response.status_code == 201
+    assert len(response.json()) == 3
+
+
+@pytest.mark.parametrize(
+    "overrides,status",
+    [
+        ({"start_time": "09:10"}, 422),
+        ({"end_time": "11:15"}, 422),
+        ({"break_start": "09:00"}, 422),
+        ({"date": (local_today() - timedelta(days=1)).isoformat()}, 422),
+        ({"extra": "ignored"}, 422),
+        ({"clinic_id": 999}, 404),
+        ({"doctor_id": 999}, 404),
+        ({"clinic_id": 2, "doctor_id": 1}, 404),
+    ],
+)
+def test_invalid_schedule(client: TestClient, overrides: dict[str, object], status: int) -> None:
+    day = local_today() + timedelta(days=5)
+    params = {"clinic_id": 1, "date": day.isoformat()}
+    before = client.get("/api/slots", params=params).json()
+    response = client.post("/api/slots", json=schedule_payload(day, **overrides))
+    assert response.status_code == status
+    assert "detail" in response.json()
+    assert client.get("/api/slots", params=params).json() == before
+
+
+def test_add_schedule_rejects_overlap(client: TestClient, repository: ClinicRepository) -> None:
+    start = repository.get_slot(1).starts_at.astimezone(LOCAL_TIMEZONE)
+    response = client.post(
+        "/api/slots",
+        json=schedule_payload(
+            start.date(),
+            start_time=start.strftime("%H:%M"),
+            end_time=(start + timedelta(hours=1)).strftime("%H:%M"),
+        ),
+    )
+    assert response.status_code == 409
+    assert "пересекается" in response.json()["detail"]
